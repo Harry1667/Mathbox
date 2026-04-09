@@ -86,3 +86,7 @@ Temporary Items
 dist/
 dist-ssr/
 build/
+.gstack/
+
+# ProxyCLI SDK（含 token，不上傳）
+01-dev/skills/

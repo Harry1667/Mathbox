@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Search, Moon, Sun, Plus, Settings,
+  Moon, Sun, Plus, Settings, Send,
   Menu, Calculator, Library, Zap, Cpu, Infinity, ChevronDown,
   Check, X, Edit, Trash2, Tag, BookOpen, AlertCircle,
-  LayoutTemplate, Code, Sparkles, Loader2, Copy
+  LayoutTemplate, Code, Loader2, Copy, Sparkles, RotateCcw
 } from 'lucide-react';
 import { BlockMath, InlineMath } from 'react-katex';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -423,14 +423,12 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
 function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose: () => void, formulas: Formula[] }) {
   const [precision, setPrecision] = useState(Number(localStorage.getItem('app_precision')) || 7);
   const [systemUnit, setSystemUnit] = useState(localStorage.getItem('app_system_unit') || 'metric');
-  const [apiKey, setApiKey] = useState(localStorage.getItem('app_api_key') || '');
   const [themeColor, setThemeColor] = useState(localStorage.getItem('app_theme_color') || 'blue');
   const [isResetting, setIsResetting] = useState(false);
 
   const handleSave = () => {
     localStorage.setItem('app_precision', precision.toString());
     localStorage.setItem('app_system_unit', systemUnit);
-    localStorage.setItem('app_api_key', apiKey);
     localStorage.setItem('app_theme_color', themeColor);
     window.location.reload(); 
   };
@@ -442,7 +440,6 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
     // Clear Local Storage Settings
     localStorage.removeItem('app_precision');
     localStorage.removeItem('app_system_unit');
-    localStorage.removeItem('app_api_key');
     localStorage.removeItem('app_theme_color');
 
     // Wipe all formulas from DB sequentially to avoid locking
@@ -500,15 +497,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">3. AI 生成助手 (AI Assistant)</h3>
-            <label className="block space-y-2">
-               <span className="text-sm text-gray-600 dark:text-gray-400 block">OpenAI / Gemini API Key</span>
-               <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-..." className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-700 rounded-lg p-2.5 outline-none dark:text-white font-mono text-sm" />
-            </label>
-          </div>
-
-          <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">4. 介面視覺 (Appearance)</h3>
+            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">3. 介面視覺 (Appearance)</h3>
             <label className="block space-y-2">
                <span className="text-sm text-gray-600 dark:text-gray-400 block">介面主題強調色</span>
                <div className="flex gap-3">
@@ -522,7 +511,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">5. 開發者選項 (Developer Tools)</h3>
+            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">4. 開發者選項 (Developer Tools)</h3>
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-bold text-gray-800 dark:text-gray-200">取得空白 JSON 模板</div>
@@ -571,7 +560,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
     </div>
   )
 }
-// FORMULA BUILDER MODAL (Tabs: GUI, JSON, AI)
+// FORMULA BUILDER MODAL (Tabs: GUI, JSON)
 // ==========================================
 
 function VariableConfigRow({ 
@@ -641,9 +630,55 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
     initialData ? initialData.variables.map((v, i) => ({ _id: `v_${i}`, ...v })) : [{ _id: 'v1', symbol: '', name: '', type: 'current', defaultUnit: 'A' }]
   );
 
-  // AI State
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
+  // AI 對話狀態
+  const [aiInput, setAiInput] = useState('');
+  const [aiMessages, setAiMessages] = useState<{role: 'user'|'ai', content: string}[]>([]);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiPreview, setAiPreview] = useState<Formula | null>(null);
+  const aiChatRef = useRef<HTMLDivElement>(null);
+
+  const handleAiGenerate = async () => {
+    if (!aiInput.trim() || aiGenerating) return;
+    const userMsg = aiInput.trim();
+    setAiInput('');
+    setAiMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setAiGenerating(true);
+    setError('');
+
+    try {
+      const resp = await fetch('/api/ai/generate-formula', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: userMsg, history: aiMessages }),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok) throw new Error(data.error || '生成失敗');
+
+      if (data.formula) {
+        setAiPreview(data.formula);
+        setGlobalCategory(data.formula.category || globalCategory);
+        setAiMessages(prev => [...prev, { role: 'ai', content: `已生成公式「${data.formula.name}」，請確認預覽` }]);
+      } else if (data.message) {
+        setAiMessages(prev => [...prev, { role: 'ai', content: data.message }]);
+      }
+    } catch (err: any) {
+      setError(err.message);
+      setAiMessages(prev => [...prev, { role: 'ai', content: `錯誤：${err.message}` }]);
+    } finally {
+      setAiGenerating(false);
+      setTimeout(() => aiChatRef.current?.scrollTo({ top: aiChatRef.current.scrollHeight, behavior: 'smooth' }), 100);
+    }
+  };
+
+  const handleAiAccept = () => {
+    if (!aiPreview) return;
+    try {
+      onSave(handleValidation(aiPreview));
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
 
   const handleValidation = (parsed: any) => {
     const required = ['id', 'name', 'category', 'latex', 'mathjs', 'variables', 'result'];
@@ -687,33 +722,10 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
     }
   };
 
-  const handleSaveAi = () => {
-      setError('');
-      if (!aiPrompt.trim()) { setError("請輸入指令"); return; }
-      setIsGenerating(true);
-      setTimeout(() => {
-          setIsGenerating(false);
-          const genObj = {
-            id: `ai_gen_${Date.now()}`,
-            name: "動能公式",
-            category: globalCategory,
-            latex: "K = \\frac{1}{2} m v^2",
-            mathjs: "0.5 * m * v^2",
-            variables: [
-              { symbol: "m", name: "質量", type: "mass", defaultUnit: "kg" },
-              { symbol: "v", name: "速度", "type": "velocity", "defaultUnit": "m/s" }
-            ],
-            result: { symbol: "K", name: "動能", "type": "energy", defaultUnit: "J" }
-          };
-          setJsonInput(JSON.stringify(genObj, null, 2));
-          setActiveTab('json');
-      }, 2000);
-  };
-
   const handleConfirmAction = () => {
       if (activeTab === 'gui') handleSaveGui();
       else if (activeTab === 'json') handleSaveJson();
-      else handleSaveAi();
+      else if (activeTab === 'ai') handleAiAccept();
   }
 
   if (!isOpen) return null;
@@ -822,7 +834,7 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
           {activeTab === 'json' && (
             <div className="flex-1 flex flex-col h-full space-y-4">
               <p className="text-sm text-gray-500">請將符合 Formula Object 規格的 JSON 字串貼入下方。</p>
-              <textarea 
+              <textarea
                 value={jsonInput} onChange={(e) => setJsonInput(e.target.value)}
                 className="w-full flex-1 p-4 bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl font-mono text-sm text-gray-800 dark:text-gray-300 focus:outline-none focus:border-blue-500 resize-none whitespace-pre"
                 placeholder={`{\n  "id": "ohms_law",\n  "name": "歐姆定律",\n  "category": "電路學",\n  "latex": "V = I \\\\cdot R",\n...`}
@@ -831,24 +843,81 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
           )}
 
           {activeTab === 'ai' && (
-            <div className="flex-1 flex flex-col h-full space-y-4 items-center justify-center py-10">
-              <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl flex items-center justify-center mb-4">
-                <Sparkles size={32} className="text-indigo-600 dark:text-indigo-400"/>
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">一句話生成公式</h3>
-              <p className="text-sm text-gray-500 text-center max-w-sm mb-6">描述您需要解決的物理或工程問題，AI 將自動生成排版與單位綁定完整的 JSON 設定檔。</p>
-              
-              <div className="w-full max-w-md relative">
-                <input 
-                  value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
-                  disabled={isGenerating}
-                  className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-2xl py-4 pl-4 pr-12 shadow-sm outline-none focus:ring-2 focus:ring-indigo-500/50 dark:text-white disabled:opacity-50"
-                  placeholder="例如：請幫我建立動能公式..."
-                  onKeyDown={e => e.key === 'Enter' && handleConfirmAction()}
-                />
-                {!isGenerating && (
-                   <button onClick={handleConfirmAction} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-colors"><Search size={16}/></button>
+            <div className="flex-1 flex flex-col h-full">
+              {/* 對話區 */}
+              <div ref={aiChatRef} className="flex-1 overflow-y-auto space-y-3 mb-4 min-h-[200px] max-h-[400px] px-1">
+                {aiMessages.length === 0 && !aiPreview && (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <div className="w-14 h-14 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl flex items-center justify-center mb-4">
+                      <Sparkles size={28} className="text-indigo-600 dark:text-indigo-400"/>
+                    </div>
+                    <p className="text-sm text-gray-500 max-w-sm">描述你想建立的公式，AI 會自動生成完整的 LaTeX 排版與單位設定。</p>
+                    <div className="flex flex-wrap gap-2 mt-4 justify-center">
+                      {['牛頓第二運動定律', '電容充電時間常數 τ=RC', '理想氣體方程式'].map(s => (
+                        <button key={s} onClick={() => { setAiInput(s); }} className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
+                {aiMessages.map((msg, i) => (
+                  <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
+                    <div className={cn("max-w-[80%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap",
+                      msg.role === 'user'
+                        ? "bg-indigo-600 text-white rounded-br-md"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-bl-md"
+                    )}>
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+                {aiGenerating && (
+                  <div className="flex justify-start">
+                    <div className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-bl-md">
+                      <Loader2 size={16} className="animate-spin text-indigo-500" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* AI 預覽卡 */}
+              {aiPreview && (
+                <div className="mb-4 p-4 bg-indigo-50/50 dark:bg-indigo-900/10 border border-indigo-200 dark:border-indigo-800/40 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">AI 生成預覽</span>
+                    <button onClick={() => { setAiPreview(null); setAiMessages(prev => [...prev, { role: 'user', content: '重新生成' }]); handleAiGenerate(); }} className="text-xs text-gray-500 hover:text-indigo-600 flex items-center gap-1">
+                      <RotateCcw size={12}/> 重新生成
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">{aiPreview.category}</span>
+                    <span className="font-bold text-gray-900 dark:text-white">{aiPreview.name}</span>
+                  </div>
+                  <div className="py-3 bg-white dark:bg-gray-900 rounded-xl px-4 text-xl border border-gray-100 dark:border-gray-800 overflow-x-auto text-center">
+                    <BlockMath math={aiPreview.latex} />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg">結果: {aiPreview.result.symbol} ({aiPreview.result.name})</span>
+                    {aiPreview.variables.map((v, i) => (
+                      <span key={i} className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-lg">{v.symbol} ({v.name}) [{v.defaultUnit}]</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 輸入欄 */}
+              <div className="flex gap-2">
+                <input
+                  value={aiInput} onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAiGenerate()}
+                  disabled={aiGenerating}
+                  className="flex-1 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50 dark:text-white disabled:opacity-50"
+                  placeholder={aiPreview ? "輸入修正指令... 例如：把單位改成 CGS" : "描述你想建立的公式..."}
+                />
+                <button onClick={handleAiGenerate} disabled={aiGenerating || !aiInput.trim()} className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl transition-colors">
+                  <Send size={18}/>
+                </button>
               </div>
             </div>
           )}
@@ -864,12 +933,16 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
         {/* Modal Footer */}
         <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-3 bg-gray-50/50 dark:bg-gray-900/50 rounded-b-3xl">
           <button onClick={onClose} className="px-6 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors">取消</button>
-          
-          <button onClick={handleConfirmAction} disabled={isGenerating} className="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-md transition-colors flex items-center gap-2 disabled:opacity-70">
-            {isGenerating ? <><Loader2 size={18} className="animate-spin"/> 正在生成...</> : (
-              activeTab === 'ai' ? <><Sparkles size={18} /> 生成 JSON</> : <><Check size={18} /> 儲存設定檔</>
-            )}
-          </button>
+
+          {activeTab === 'ai' ? (
+            <button onClick={handleAiAccept} disabled={!aiPreview} className="px-8 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-xl shadow-md transition-colors flex items-center gap-2">
+              <Check size={18} /> 確認加入公式
+            </button>
+          ) : (
+            <button onClick={handleConfirmAction} className="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-md transition-colors flex items-center gap-2">
+              <Check size={18} /> 儲存設定檔
+            </button>
+          )}
         </div>
       </motion.div>
     </div>
@@ -977,7 +1050,7 @@ export default function App() {
             <div className="bg-blue-50 dark:bg-blue-900/30 p-2 rounded-xl border border-blue-100 dark:border-blue-900/50">
               <Calculator size={22} className="stroke-[2.5]" />
             </div>
-            <h1 className="font-bold text-[17px] tracking-tight text-gray-900 dark:text-white">Formula Architect</h1>
+            <h1 className="font-bold text-[17px] tracking-tight text-gray-900 dark:text-white">MathBox</h1>
           </div>
         </div>
         
