@@ -83,10 +83,16 @@ app.put('/api/formulas/:id/note', async (req, res) => {
   }
 });
 
+// Production 模式：serve 前端靜態檔
+app.use(express.static(join(__dirname, 'dist')));
+app.get('*path', (req, res) => {
+  res.sendFile(join(__dirname, 'dist', 'index.html'));
+});
+
 initializeDB().then(() => {
-  const port = 3001;
+  const port = process.env.PORT || 3001;
   app.listen(port, () => {
-    console.log(`🚀 API Server running at http://localhost:${port}`);
+    console.log(`🚀 Server running at http://localhost:${port}`);
   });
 }).catch(err => {
   console.error("❌ Database initialization failed:", err);

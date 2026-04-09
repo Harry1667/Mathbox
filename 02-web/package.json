@@ -1,12 +1,13 @@
 {
-  "name": "02-web",
+  "name": "mathbox",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "backend": "node server.mjs",
-    "start": "concurrently \"npm run backend\" \"npm run dev\"",
+    "start": "node server.mjs",
+    "dev:all": "concurrently \"npm run backend\" \"npm run dev\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

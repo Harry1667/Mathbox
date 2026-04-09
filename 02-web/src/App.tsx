@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Search, Moon, Sun, Plus, Settings, History, 
-  Menu, Calculator, Library, Zap, Cpu, Infinity, ChevronDown, 
-  ChevronRight, Check, X, Edit, Trash2, Tag, BookOpen, AlertCircle,
+  Search, Moon, Sun, Plus, Settings,
+  Menu, Calculator, Library, Zap, Cpu, Infinity, ChevronDown,
+  Check, X, Edit, Trash2, Tag, BookOpen, AlertCircle,
   LayoutTemplate, Code, Sparkles, Loader2, Copy
 } from 'lucide-react';
 import { BlockMath, InlineMath } from 'react-katex';
@@ -160,7 +160,7 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
     setSavedNote(noteDraft); 
     setIsNoteEditing(false); 
     try {
-      await fetch(`http://localhost:3001/api/formulas/${formula.id}/note`, {
+      await fetch(`/api/formulas/${formula.id}/note`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: noteDraft })
@@ -205,6 +205,7 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
 
       // 4. 動態載入 nerdamer 執行代數求解
       const nerdamerContext = (await import('nerdamer')).default;
+      // @ts-ignore
       await import('nerdamer/Solve.js');
 
       const solStr = nerdamerContext(eqStr).solveFor(unknownToSolve.symbol).toString();
@@ -355,7 +356,7 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
                           }
                           return (
                             <div key={`text-${idx}`} className="text-gray-800 dark:text-gray-200 text-[22px] shrink-0 flex items-center mx-1">
-                               <InlineMath math={mathStr} renderError={(e) => <span className="font-mono text-lg">{part}</span>} />
+                               <InlineMath math={mathStr} renderError={(_e) => <span className="font-mono text-lg">{part}</span>} />
                             </div>
                           );
                         }
@@ -447,7 +448,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
     // Wipe all formulas from DB sequentially to avoid locking
     try {
       for (const f of formulas) {
-        await fetch(`http://localhost:3001/api/formulas/${f.id}`, { method: 'DELETE' });
+        await fetch(`/api/formulas/${f.id}`, { method: 'DELETE' });
       }
     } catch(e) {
       console.error(e);
@@ -890,7 +891,7 @@ export default function App() {
 
   useEffect(() => {
     // 取得資料庫中的 Formula
-    fetch('http://localhost:3001/api/formulas')
+    fetch('/api/formulas')
       .then(res => res.json())
       .then(data => {
         if (data.length > 0) {
@@ -899,7 +900,7 @@ export default function App() {
           // 若資料庫為空，寫入初始預設值
           setFormulas(DEFAULT_FORMULAS);
           DEFAULT_FORMULAS.forEach(f => {
-            fetch('http://localhost:3001/api/formulas', {
+            fetch('/api/formulas', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(f)
@@ -935,14 +936,14 @@ export default function App() {
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`http://localhost:3001/api/formulas/${id}`, { method: 'DELETE' });
+      await fetch(`/api/formulas/${id}`, { method: 'DELETE' });
       setFormulas(prev => prev.filter(f => f.id !== id));
     } catch(e) { console.error(e); }
   };
 
   const handleAddFormula = async (newFormula: Formula) => {
     try {
-      await fetch('http://localhost:3001/api/formulas', {
+      await fetch('/api/formulas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newFormula)
