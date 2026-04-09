@@ -508,7 +508,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">5. 介面視覺 (Appearance)</h3>
+            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">4. 介面視覺 (Appearance)</h3>
             <label className="block space-y-2">
                <span className="text-sm text-gray-600 dark:text-gray-400 block">介面主題強調色</span>
                <div className="flex gap-3">
@@ -522,7 +522,7 @@ function SettingsModal({ isOpen, onClose, formulas }: { isOpen: boolean, onClose
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">6. 開發者選項 (Developer Tools)</h3>
+            <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 pb-2">5. 開發者選項 (Developer Tools)</h3>
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-bold text-gray-800 dark:text-gray-200">取得空白 JSON 模板</div>
