@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Moon, Sun, Plus, Settings, Send,
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  Moon, Sun, Plus, Settings, Send, Search, Clock, ArrowRight, Repeat2,
   Menu, Calculator, Library, Zap, Cpu, Infinity, ChevronDown,
   Check, X, Edit, Trash2, Tag, BookOpen, AlertCircle,
   LayoutTemplate, Code, Loader2, Copy, Sparkles, RotateCcw
@@ -36,6 +36,7 @@ export type Formula = {
   mathjs: string;
   variables: FormulaVariable[];
   result: FormulaVariable;
+  mode?: 'algebraic' | 'calculus' | 'matrix' | 'evaluate';
   note?: string;
 };
 
@@ -108,6 +109,7 @@ function VarCell({
         value={unit} onChange={(e) => onUnitChange(e.target.value)}
         className="h-8 text-xs font-medium text-gray-600 dark:text-gray-300 bg-transparent border-none outline-none cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
       >
+        {unitOptions.length === 0 && unit && <option value={unit}>{unit}</option>}
         {unitOptions.map(u => <option key={u.display} value={u.display}>{u.display}</option>)}
       </select>
     </div>
@@ -118,7 +120,7 @@ function VarCell({
 // FORMULA CARD 
 // ==========================================
 
-function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete: (id: string) => void, onEdit: (f: Formula) => void }) {
+function FormulaCard({ formula, onDelete, onEdit, onCalcResult }: { formula: Formula, onDelete: (id: string) => void, onEdit: (f: Formula) => void, onCalcResult?: (entry: {id:string,name:string,inputs:Record<string,string>,result:string,time:string}) => void }) {
   const [expanded, setExpanded] = useState(false);
   
   // Note state
@@ -131,7 +133,11 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
 
   // Calculation States
-  const allVars = [formula.result, ...formula.variables];
+  // 把 variables 裡跟 result 重複的 symbol 過濾掉（防止 AI 生成時把目標結果也放進輸入變數）
+  const allVars = [
+    formula.result,
+    ...formula.variables.filter(v => v.symbol !== formula.result.symbol),
+  ];
 
   const [inputVals, setInputVals] = useState<Record<string, string>>({});
   const [inputUnits, setInputUnits] = useState<Record<string, string>>(() => {
@@ -141,8 +147,14 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
   });
   
   const [targetVar, setTargetVar] = useState<string | null>(null);
-  const [computedValue, setComputedValue] = useState<number | null>(null);
+  const [computedValue, setComputedValue] = useState<number | string | null>(null);
   const [calcError, setCalcError] = useState('');
+
+  const setResult = (sym: string, val: number | string) => {
+    setTargetVar(sym);
+    setComputedValue(val);
+    onCalcResult?.({ id: formula.id, name: formula.name, inputs: {...inputVals}, result: String(val), time: new Date().toLocaleString('zh-TW') });
+  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -169,76 +181,165 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
   };
   const handleCancelNote = () => { setNoteDraft(savedNote); setIsNoteEditing(false); };
 
-  // 執行全向代數計算邏輯 (藉由 Nerdamer)
+  // 計算引擎：支援代數求解、微積分、矩陣、直接數值計算
   const handleCalculate = async () => {
     setCalcError('');
     setTargetVar(null);
     setComputedValue(null);
 
     try {
-      // 1. 找出有填寫與未填寫的變數
-      const emptyVars = allVars.filter(v => !inputVals[v.symbol] || inputVals[v.symbol].trim() === '');
-      if (emptyVars.length !== 1) {
-        throw new Error(`請填寫已知變數，保留「剛好 1 個」未知數來求解。目前保留了 ${emptyVars.length} 個未知數`);
-      }
-      const unknownToSolve = emptyVars[0];
+      const mode = formula.mode || detectMode(formula.mathjs);
 
-      // 2. 轉換已知變數為標準 SI 單位
+      // 收集所有已填寫的變數值（轉 SI）
       const scope: Record<string, number> = {};
       for (const v of allVars) {
-        if (v === unknownToSolve) continue;
+        const raw = inputVals[v.symbol];
+        if (!raw || raw.trim() === '') continue;
         const u = inputUnits[v.symbol];
-        const typeInfo = UNITS_DB[v.type];
-        const ratio = typeInfo?.units.find(x => x.display === u)?.ratio || 1;
-        
-        const valNum = Number(inputVals[v.symbol]);
+        const ratio = UNITS_DB[v.type]?.units.find(x => x.display === u)?.ratio || 1;
+        const valNum = Number(raw);
         if (isNaN(valNum)) throw new Error(`變數 ${v.symbol} 的數字格式無效`);
-        
-        scope[v.symbol] = valNum * ratio; // 轉為 SI 基本單位
+        scope[v.symbol] = valNum * ratio;
       }
 
-      // 3. 建構等式字串
-      let eqStr = formula.mathjs;
-      if (!eqStr.includes('=')) {
-        eqStr = `${formula.result.symbol} = ${formula.mathjs}`;
+      if (mode === 'calculus') {
+        await handleCalculus(scope);
+      } else if (mode === 'matrix') {
+        handleMatrix(scope);
+      } else if (mode === 'evaluate') {
+        handleEvaluate(scope);
+      } else {
+        await handleAlgebraic(scope);
       }
-
-      // 4. 動態載入 nerdamer 執行代數求解
-      const nerdamerContext = (await import('nerdamer')).default;
-      // @ts-ignore
-      await import('nerdamer/Solve.js');
-
-      const solStr = nerdamerContext(eqStr).solveFor(unknownToSolve.symbol).toString();
-      
-      // Nerdamer 可能拋出多個解 (如二次方會有正負解)
-      const roots = solStr.split(',');
-      let finalRoot: number | null = null;
-      
-      for (const rootStr of roots) {
-         try {
-            const num = evaluate(rootStr, scope);
-            // 物理公式優先取正數解
-            if (typeof num === 'number' && !isNaN(num) && num > 0) {
-              finalRoot = num;
-              break;
-            } else if (finalRoot === null && typeof num === 'number' && !isNaN(num)) {
-              finalRoot = num; // 若無正數解則紀錄為備用解
-            }
-         } catch (e) { /* mathjs 評估錯誤忽略 */ }
-      }
-
-      if (finalRoot === null) throw new Error("未能算出有意義的實數結果");
-      
-      setTargetVar(unknownToSolve.symbol);
-      setComputedValue(finalRoot);
-
     } catch (err: any) {
       setCalcError(err.message || '計算發生錯誤');
     }
   };
 
+  // 自動偵測計算模式
+  function detectMode(expr: string): string {
+    if (/\b(diff|derivative)\s*\(/.test(expr)) return 'calculus';
+    if (/\b(integrate|int)\s*\(/.test(expr)) return 'calculus';
+    if (/\b(det|inv|transpose|matrix)\s*\(/.test(expr)) return 'matrix';
+    if (/\beval\s*\(/.test(expr)) return 'evaluate';
+    return 'algebraic';
+  }
+
+  // 代數求解（原有邏輯）
+  const handleAlgebraic = async (scope: Record<string, number>) => {
+    const emptyVars = allVars.filter(v => !(v.symbol in scope));
+    if (emptyVars.length !== 1) {
+      throw new Error(`請保留「剛好 1 個」未知數。目前有 ${emptyVars.length} 個未填`);
+    }
+    const unknown = emptyVars[0];
+
+    let eqStr = formula.mathjs;
+    if (!eqStr.includes('=')) {
+      eqStr = `${formula.result.symbol} = ${formula.mathjs}`;
+    }
+
+    const nerdamerCtx = (await import('nerdamer')).default;
+    // @ts-ignore
+    await import('nerdamer/Solve.js');
+
+    let finalRoot: number | null = null;
+    try {
+      const solStr = nerdamerCtx(eqStr).solveFor(unknown.symbol).toString();
+      const roots = solStr.split(',');
+      for (const rootStr of roots) {
+        try {
+          const num = evaluate(rootStr, scope);
+          if (typeof num === 'number' && !isNaN(num) && num > 0) { finalRoot = num; break; }
+          else if (finalRoot === null && typeof num === 'number' && !isNaN(num)) { finalRoot = num; }
+        } catch { /* skip */ }
+      }
+    } catch {
+      try {
+        const result = evaluate(formula.mathjs, scope);
+        if (typeof result === 'number' && !isNaN(result)) {
+          setResult(formula.result.symbol, result);
+          return;
+        }
+      } catch { /* skip */ }
+    }
+
+    if (finalRoot === null) throw new Error("未能算出有意義的實數結果");
+    setResult(unknown.symbol, finalRoot);
+  };
+
+  // 微積分計算
+  const handleCalculus = async (scope: Record<string, number>) => {
+    const nerdamerCtx = (await import('nerdamer')).default;
+    // @ts-ignore
+    await import('nerdamer/Calculus.js');
+
+    let expr = formula.mathjs;
+
+    // diff(expr, var) → 符號微分
+    const diffMatch = expr.match(/diff\((.+),\s*(\w+)\)/);
+    if (diffMatch) {
+      const [, innerExpr, diffVar] = diffMatch;
+      const result = nerdamerCtx.diff(innerExpr, diffVar);
+      // 如果 scope 有值 → 代入數值，否則輸出符號結果
+      if (Object.keys(scope).length > 0) {
+        try {
+          const num = evaluate(result.toString(), scope);
+          if (typeof num === 'number') { setResult(formula.result.symbol, num); return; }
+        } catch { /* 符號結果 */ }
+      }
+      setResult(formula.result.symbol, result.toTeX());
+      return;
+    }
+
+    // integrate(expr, var) → 符號積分
+    const intMatch = expr.match(/integrate\((.+),\s*(\w+)\)/);
+    if (intMatch) {
+      const [, innerExpr, intVar] = intMatch;
+      const result = nerdamerCtx.integrate(innerExpr, intVar);
+      if (Object.keys(scope).length > 0) {
+        try {
+          const num = evaluate(result.toString(), scope);
+          if (typeof num === 'number') { setResult(formula.result.symbol, num); return; }
+        } catch { /* 符號結果 */ }
+      }
+      setResult(formula.result.symbol, result.toTeX());
+      return;
+    }
+
+    throw new Error("無法解析微積分表達式。格式：diff(expr, var) 或 integrate(expr, var)");
+  };
+
+  // 矩陣計算
+  const handleMatrix = (scope: Record<string, number>) => {
+    let expr = formula.mathjs;
+    // 代入已知值
+    for (const [sym, val] of Object.entries(scope)) {
+      expr = expr.replace(new RegExp(`\\b${sym}\\b`, 'g'), String(val));
+    }
+
+    const result = evaluate(expr);
+    if (typeof result === 'number') {
+      setResult(formula.result.symbol, result);
+    } else if (result?.toArray) {
+      setResult(formula.result.symbol, JSON.stringify(result.toArray()));
+    } else {
+      setResult(formula.result.symbol, String(result));
+    }
+  };
+
+  // 直接數值計算（fallback）
+  const handleEvaluate = (scope: Record<string, number>) => {
+    let expr = formula.mathjs;
+    for (const [sym, val] of Object.entries(scope)) {
+      expr = expr.replace(new RegExp(`\\b${sym}\\b`, 'g'), String(val));
+    }
+    const result = evaluate(expr);
+    setResult(formula.result.symbol, typeof result === 'number' ? result : String(result));
+  };
+
   const getDisplayValue = (symbol: string) => {
     if (symbol === targetVar && computedValue !== null) {
+       if (typeof computedValue === 'string') return computedValue; // 符號結果直接顯示
        const vInfo = allVars.find(v => v.symbol === symbol);
        if (!vInfo) return '';
        const u = inputUnits[symbol];
@@ -317,52 +418,34 @@ function FormulaCard({ formula, onDelete, onEdit }: { formula: Formula, onDelete
                   <Calculator size={14}/> 互動計算區
                 </h4>
                 
-                <div className="w-full flex flex-wrap items-center justify-center py-5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-x-auto overflow-y-hidden custom-scrollbar px-2 min-h-[5rem]">
-                    {/* Tokenized LaTeX Representation */}
-                    {(() => {
-                      const allSymbols = [...formula.variables.map(v => v.symbol), formula.result.symbol].sort((a,b) => b.length - a.length);
-                      if (allSymbols.length === 0) return <BlockMath math={formula.latex} />;
-                      
-                      const escapedSymbols = allSymbols.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-                      const regex = new RegExp(`\\b(${escapedSymbols.join('|')})\\b`, 'g');
-                      
-                      const parts = formula.latex.split(regex);
-                      
-                      return parts.map((part, idx) => {
-                        const matchedVar = allVars.find(v => v.symbol === part);
-                        
-                        if (matchedVar) {
-                          return (
-                            <div key={`var-${idx}`} className="mx-1.5 inline-flex shrink-0">
-                              <VarCell 
-                                symbol={matchedVar.symbol} 
-                                value={getDisplayValue(matchedVar.symbol)} 
-                                onChange={(val) => {
-                                   setInputVals({...inputVals, [matchedVar.symbol]: val});
-                                   if (targetVar === matchedVar.symbol) setTargetVar(null);
-                                }} 
-                                status={targetVar === matchedVar.symbol && computedValue !== null ? 'result' : 'idle'}
-                                unit={inputUnits[matchedVar.symbol]}
-                                onUnitChange={(u) => setInputUnits({...inputUnits, [matchedVar.symbol]: u})}
-                                unitOptions={UNITS_DB[matchedVar.type]?.units || []}
-                              />
-                            </div>
-                          );
-                        } else if (part.trim().length > 0) {
-                          let mathStr = part;
-                          if (mathStr.trim() === '=') mathStr = ' = ';
-                          if (mathStr.trim().startsWith('^') || mathStr.trim().startsWith('_')) {
-                             mathStr = "{}" + mathStr;
-                          }
-                          return (
-                            <div key={`text-${idx}`} className="text-gray-800 dark:text-gray-200 text-[22px] shrink-0 flex items-center mx-1">
-                               <InlineMath math={mathStr} renderError={(_e) => <span className="font-mono text-lg">{part}</span>} />
-                            </div>
-                          );
-                        }
-                        return null;
-                      });
-                    })()}
+                {/* 公式顯示 */}
+                <div className="w-full py-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-4 overflow-x-auto text-xl text-center">
+                  <BlockMath math={formula.latex} />
+                </div>
+
+                {/* 變數輸入列表 */}
+                <div className="grid gap-2 mt-3">
+                  {allVars.map(v => (
+                    <div key={v.symbol} className="flex items-center gap-3">
+                      <div className="w-20 text-right shrink-0">
+                        <span className={cn("text-sm font-semibold", targetVar === v.symbol && computedValue !== null ? "text-green-600 dark:text-green-400" : "text-gray-700 dark:text-gray-300")}>
+                          <InlineMath math={v.symbol} /> <span className="text-[11px] text-gray-400">({v.name})</span>
+                        </span>
+                      </div>
+                      <VarCell
+                        symbol={v.symbol}
+                        value={getDisplayValue(v.symbol)}
+                        onChange={(val) => {
+                          setInputVals({...inputVals, [v.symbol]: val});
+                          if (targetVar === v.symbol) setTargetVar(null);
+                        }}
+                        status={targetVar === v.symbol && computedValue !== null ? 'result' : 'idle'}
+                        unit={inputUnits[v.symbol]}
+                        onUnitChange={(u) => setInputUnits({...inputUnits, [v.symbol]: u})}
+                        unitOptions={UNITS_DB[v.type]?.units || []}
+                      />
+                    </div>
+                  ))}
                 </div>
 
                 {calcError && (
@@ -646,11 +729,15 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
     setError('');
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 55000);
       const resp = await fetch('/api/ai/generate-formula', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: userMsg, history: aiMessages }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await resp.json();
 
       if (!resp.ok) throw new Error(data.error || '生成失敗');
@@ -930,8 +1017,8 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-3 bg-gray-50/50 dark:bg-gray-900/50 rounded-b-3xl">
+        {/* Modal Footer — sticky 避免被長變數列表擠出可視區 */}
+        <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-3 bg-white/95 dark:bg-gray-900/95 backdrop-blur rounded-b-3xl shrink-0 sticky bottom-0 z-20">
           <button onClick={onClose} className="px-6 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors">取消</button>
 
           {activeTab === 'ai' ? (
@@ -950,6 +1037,77 @@ function FormulaBuilderModal({ isOpen, onClose, onSave, initialData }: { isOpen:
 }
 
 // ==========================================
+// 單位換算工具
+// ==========================================
+
+function UnitConverterModal({ onClose }: { onClose: () => void }) {
+  const typeEntries = Object.entries(UNITS_DB);
+  const [selectedType, setSelectedType] = useState(typeEntries[0]?.[0] || 'length');
+  const [fromUnit, setFromUnit] = useState('');
+  const [toUnit, setToUnit] = useState('');
+  const [inputVal, setInputVal] = useState('1');
+
+  const currentUnits = UNITS_DB[selectedType]?.units || [];
+
+  useEffect(() => {
+    if (currentUnits.length >= 2) {
+      setFromUnit(currentUnits[0].display);
+      setToUnit(currentUnits[1].display);
+    }
+  }, [selectedType]);
+
+  const fromRatio = currentUnits.find(u => u.display === fromUnit)?.ratio || 1;
+  const toRatio = currentUnits.find(u => u.display === toUnit)?.ratio || 1;
+  const result = (Number(inputVal) || 0) * fromRatio / toRatio;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}}
+        className="bg-white dark:bg-gray-900 w-full max-w-lg rounded-3xl shadow-2xl relative z-10 border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <div className="px-6 pt-6 pb-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center">
+          <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2"><Repeat2 size={20}/> 單位換算</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"><X size={18}/></button>
+        </div>
+        <div className="p-6 space-y-5">
+          <select value={selectedType} onChange={e => setSelectedType(e.target.value)}
+            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm dark:text-white outline-none">
+            {typeEntries.map(([key, info]) => <option key={key} value={key}>{info.label}</option>)}
+          </select>
+
+          <div className="flex items-center gap-3">
+            <div className="flex-1 space-y-2">
+              <input type="number" value={inputVal} onChange={e => setInputVal(e.target.value)}
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-lg font-mono dark:text-white outline-none focus:ring-2 focus:ring-blue-500/30" />
+              <select value={fromUnit} onChange={e => setFromUnit(e.target.value)}
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2 text-sm dark:text-white outline-none">
+                {currentUnits.map(u => <option key={u.display} value={u.display}>{u.display}</option>)}
+              </select>
+            </div>
+
+            <button onClick={() => { setFromUnit(toUnit); setToUnit(fromUnit); }} className="p-2 text-gray-400 hover:text-blue-500 transition-colors shrink-0">
+              <ArrowRight size={20}/>
+            </button>
+
+            <div className="flex-1 space-y-2">
+              <div className="w-full bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/50 rounded-xl p-3 text-lg font-mono text-green-700 dark:text-green-400 text-right">
+                {isNaN(result) ? '—' : result.toPrecision(7).replace(/\.?0+$/, '')}
+              </div>
+              <select value={toUnit} onChange={e => setToUnit(e.target.value)}
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2 text-sm dark:text-white outline-none">
+                {currentUnits.map(u => <option key={u.display} value={u.display}>{u.display}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-400 text-center">1 {fromUnit} = {(fromRatio/toRatio).toPrecision(6).replace(/\.?0+$/,'')} {toUnit}</p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ==========================================
 // MAIN APP ARCHITECTURE
 // ==========================================
 
@@ -960,9 +1118,15 @@ export default function App() {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
   const [activeCategory, setActiveCategory] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingFormula, setEditingFormula] = useState<Formula | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showUnitConverter, setShowUnitConverter] = useState(false);
+  const [calcHistory, setCalcHistory] = useState<{id: string, name: string, inputs: Record<string,string>, result: string, time: string}[]>(() => {
+    try { return JSON.parse(localStorage.getItem('mathbox_history') || '[]'); } catch { return []; }
+  });
   
   const [formulas, setFormulas] = useState<Formula[]>([]);
 
@@ -997,6 +1161,24 @@ export default function App() {
     localStorage.setItem('app_dark_mode', String(darkMode));
   }, [darkMode]);
 
+  // 全域鍵盤快捷鍵
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // 不在 input/textarea 內才觸發
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); setIsAddModalOpen(true); }
+      if (e.key === 'h' || e.key === 'H') { e.preventDefault(); setShowHistory(prev => !prev); }
+      if (e.key === 'u' || e.key === 'U') { e.preventDefault(); setShowUnitConverter(prev => !prev); }
+      if (e.key === 'd' || e.key === 'D') { e.preventDefault(); setDarkMode(prev => !prev); }
+      if (e.key === '/' || e.key === 'f') { e.preventDefault(); document.querySelector<HTMLInputElement>('[data-search]')?.focus(); }
+      if (e.key === 'Escape') { setShowHistory(false); setShowUnitConverter(false); setIsSettingsOpen(false); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const dynamicCategories = React.useMemo(() => {
     const defaultIds = CATEGORIES.map(c => c.id);
     const uniqueTags = new Set(formulas.map(f => f.category));
@@ -1010,7 +1192,21 @@ export default function App() {
     return [...CATEGORIES, ...extra];
   }, [formulas]);
 
-  const filteredFormulas = formulas.filter(f => activeCategory === 'all' || f.category === activeCategory);
+  const filteredFormulas = formulas.filter(f => {
+    const matchCat = activeCategory === 'all' || f.category === activeCategory;
+    if (!searchQuery.trim()) return matchCat;
+    const q = searchQuery.toLowerCase();
+    return matchCat && (f.name.toLowerCase().includes(q) || f.category.toLowerCase().includes(q) || f.latex.toLowerCase().includes(q) || f.variables.some(v => v.name.toLowerCase().includes(q)));
+  });
+
+  // 計算歷史持久化
+  const addHistory = useCallback((entry: typeof calcHistory[0]) => {
+    setCalcHistory(prev => {
+      const next = [entry, ...prev].slice(0, 50);
+      localStorage.setItem('mathbox_history', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const handleDelete = async (id: string) => {
     try {
@@ -1077,9 +1273,22 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50/50 dark:bg-[#0a0a0a]">
         {/* HEADER */}
         <header className="h-[72px] px-4 sm:px-8 border-b border-gray-200/80 dark:border-gray-800/80 bg-white/70 dark:bg-[#0a0a0a]/70 backdrop-blur-2xl flex justify-between items-center sticky top-0 z-20 shrink-0">
-          <div><button className="md:hidden p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl"><Menu size={20} /></button></div>
+          <div className="flex items-center gap-2">
+            <button className="md:hidden p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl"><Menu size={20} /></button>
+            <div className="relative hidden sm:block">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input data-search value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Escape' && (e.currentTarget.blur(), setSearchQuery(''))} placeholder="搜尋公式... (按 / 聚焦)" className="pl-9 pr-3 py-2 w-56 bg-gray-100 dark:bg-gray-800 border-none rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500/30 dark:text-white transition-all" />
+            </div>
+          </div>
           <div className="flex items-center gap-1">
-            <button onClick={() => setDarkMode(!darkMode)} className="p-2.5 text-amber-500 dark:text-indigo-400 hover:bg-amber-50 rounded-xl dark:hover:bg-indigo-900/30 transition-colors" title="切換主題">
+            <button onClick={() => setShowUnitConverter(true)} className="p-2.5 text-gray-500 dark:text-gray-400 hover:bg-gray-100 rounded-xl dark:hover:bg-gray-800 transition-colors" title="單位換算 (U)">
+              <Repeat2 size={20} />
+            </button>
+            <button onClick={() => setShowHistory(true)} className="p-2.5 text-gray-500 dark:text-gray-400 hover:bg-gray-100 rounded-xl dark:hover:bg-gray-800 transition-colors relative" title="計算歷史 (H)">
+              <Clock size={20} />
+              {calcHistory.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full" />}
+            </button>
+            <button onClick={() => setDarkMode(!darkMode)} className="p-2.5 text-amber-500 dark:text-indigo-400 hover:bg-amber-50 rounded-xl dark:hover:bg-indigo-900/30 transition-colors" title="切換主題 (D)">
               {darkMode ? <Sun size={20} fill="currentColor" /> : <Moon size={20} fill="currentColor" />}
             </button>
             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 text-gray-500 dark:text-gray-400 hover:bg-gray-100 rounded-xl dark:hover:bg-gray-800 transition-colors" title="設定">
@@ -1100,10 +1309,11 @@ export default function App() {
               <AnimatePresence mode='popLayout'>
                 {filteredFormulas.map(formula => (
                   <motion.div key={formula.id} layout transition={{ duration: 0.2 }} className="flex-auto sm:flex-initial w-full md:w-fit min-w-[320px] max-w-full">
-                    <FormulaCard 
-                      formula={formula} 
-                      onDelete={handleDelete} 
+                    <FormulaCard
+                      formula={formula}
+                      onDelete={handleDelete}
                       onEdit={(f) => { setEditingFormula(f); setIsAddModalOpen(true); }}
+                      onCalcResult={addHistory}
                     />
                   </motion.div>
                 ))}
@@ -1131,6 +1341,45 @@ export default function App() {
 
       <AnimatePresence>
         {isSettingsOpen && <SettingsModal formulas={formulas} isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />}
+      </AnimatePresence>
+
+      {/* 計算歷史 Slide Panel */}
+      <AnimatePresence>
+        {showHistory && (
+          <div className="fixed inset-0 z-[90]">
+            <div className="absolute inset-0 bg-black/30" onClick={() => setShowHistory(false)} />
+            <motion.div initial={{x:'100%'}} animate={{x:0}} exit={{x:'100%'}} transition={{type:'spring',damping:25,stiffness:200}}
+              className="absolute right-0 top-0 h-full w-full max-w-md bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 shadow-2xl flex flex-col">
+              <div className="h-[72px] px-6 flex items-center justify-between border-b border-gray-100 dark:border-gray-800 shrink-0">
+                <h2 className="font-bold text-gray-900 dark:text-white flex items-center gap-2"><Clock size={18}/> 計算歷史</h2>
+                <div className="flex gap-2">
+                  <button onClick={() => { setCalcHistory([]); localStorage.removeItem('mathbox_history'); }} className="text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1.5 rounded-lg">清除</button>
+                  <button onClick={() => setShowHistory(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"><X size={18}/></button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {calcHistory.length === 0 && <p className="text-sm text-gray-400 text-center py-10">尚無計算紀錄</p>}
+                {calcHistory.map((h, i) => (
+                  <div key={i} className="p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{h.name}</span>
+                      <span className="text-[10px] text-gray-400">{h.time}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 space-y-0.5">
+                      {Object.entries(h.inputs).filter(([,v]) => v).map(([k,v]) => <span key={k} className="mr-2">{k}={v}</span>)}
+                    </div>
+                    {h.result && <div className="text-sm font-mono text-green-600 dark:text-green-400 mt-1">= {h.result}</div>}
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 單位換算 Modal */}
+      <AnimatePresence>
+        {showUnitConverter && <UnitConverterModal onClose={() => setShowUnitConverter(false)} />}
       </AnimatePresence>
 
     </div>

@@ -90,3 +90,7 @@ build/
 
 # ProxyCLI SDK（含 token，不上傳）
 01-dev/skills/
+
+# 部署設定（含 SSH 細節）
+deploy.config
+dist-aapanel/

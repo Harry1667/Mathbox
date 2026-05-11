@@ -1,0 +1,18 @@
+# MathBox 部署設定
+# 複製為 deploy.config 並填入實際值
+# 注意：deploy.config 已加入 .gitignore，不會上 git
+
+# SSH 連線
+SSH_HOST="your-server.example.com"     # 或 IP
+SSH_USER="root"                          # 或 ubuntu / opc 等
+SSH_PORT="22"
+SSH_KEY=""                               # 留空用預設 key，或填路徑如 ~/.ssh/oracle.pem
+
+# 遠端路徑（aaPanel 站點目錄）
+REMOTE_PATH="/www/wwwroot/mathbox"
+
+# PM2 process 名稱
+PM2_NAME="mathbox"
+
+# 保留幾份歷史 tarball（伺服器上的 backup）
+KEEP_BACKUPS=3
