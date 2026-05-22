@@ -94,3 +94,11 @@ build/
 # 部署設定（含 SSH 細節）
 deploy.config
 dist-aapanel/
+
+# === Private dev notes (git-safety rules) ===
+01-dev/0-run.md
+01-dev/9-talk.md
+01-dev/0-runset.md
+01-dev/001-deploy-docs/
+01-dev/10-deploy-docs/
+.gstack/
