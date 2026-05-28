@@ -111,3 +111,98 @@ Formula-Architect/
 
 如果您有任何問題、建議或發現 Bug，歡迎提交 Issue。
 讓我們一起把這個工程計算神器做得更好！ 🚀
+
+---
+
+## English
+
+> **An interactive formula management and calculation platform built for engineers and students.**
+>
+> A pure front-end, local-first dashboard and calculator for engineering formulas and theorems. Solves three pain points for STEM students: rote-memorizing formulas, solving complex equations, and unit conversion.
+
+### ✨ Core Features
+
+#### 1. 🚀 High-quality LaTeX rendering
+- **KaTeX** engine for publication-grade LaTeX math.
+- Supports complex symbols, fractions, radicals, and matrix operations.
+
+#### 2. 🧮 Symbolic computation and smart solving
+- Integrates **mathjs** and **nerdamer**.
+- **Solve-by-blank**: fill in known values, leave one target variable blank, the system solves for it.
+- Real symbolic algebra — not just numeric substitution.
+
+#### 3. 📦 Custom formula library with backup
+- **Dynamic parsing**: when you add a formula, variables in the LaTeX are auto-detected and input fields generated.
+- **Categorization**: multi-level folders and subject tags (Calculus, EM, Electronics, etc.).
+- **Backup**: export your library to JSON and restore anytime.
+
+#### 4. 🎨 Minimal, polished UI/UX
+- **Light / dark mode**: adaptive Tailwind CSS 4 surface, easy on long-session eyes.
+- **Micro-interactions**: smooth card expansion and transitions via Framer Motion.
+- **Global search**: live filter across title, description, and LaTeX source.
+
+### 🛠️ Tech stack
+
+| Category | Tech |
+| :--- | :--- |
+| **Framework** | [React 19](https://react.dev/) + TypeScript |
+| **Build tool** | [Vite 6](https://vitejs.dev/) |
+| **Styling** | [Tailwind CSS 4](https://tailwindcss.com/) |
+| **Animation** | [Framer Motion](https://www.framer.com/motion/) |
+| **Math rendering** | [KaTeX](https://katex.org/) |
+| **Math engines** | [mathjs](https://mathjs.org/) + [nerdamer](https://nerdamer.com/) |
+| **Icons** | [Lucide React](https://lucide.dev/) |
+
+### 📂 Project structure
+
+```text
+Formula-Architect/
+├── 01-dev/            # Dev docs, specs, run commands
+├── 02-web/            # Main web app source
+│   ├── src/           # React components and logic
+│   ├── public/        # Static assets
+│   └── index.html     # Entry
+├── .gitignore
+└── README.md
+```
+
+### 🚀 Getting started
+
+#### Prerequisites
+- [Node.js](https://nodejs.org/) v18+
+- npm or yarn
+
+#### Install and run
+
+1. **Enter the web directory**
+   ```bash
+   cd 02-web
+   ```
+
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Start the dev server**
+   ```bash
+   npm run dev
+   ```
+
+4. **Open the browser**
+   Visit `http://localhost:5173`.
+
+### 📸 Screenshots
+
+*(Add screenshots here, e.g.:)*
+- **Dashboard view**
+- **Expanded formula calculator**
+- **Dark mode comparison**
+
+### 📝 License
+
+[MIT License](LICENSE).
+
+### 📞 Contact and support
+
+Issues and suggestions welcome — let's make this calculator better together. 🚀
